@@ -4,6 +4,9 @@
   "description": "OpenDART(전자공시시스템) MCP 서버 — 인증키는 서버 환경변수(DART_API_KEY)로 보관, URL에 노출되지 않음",
   "type": "module",
   "main": "api/mcp.js",
+  "scripts": {
+    "refresh-corp-code": "node scripts/refresh-corp-code.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3",

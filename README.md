@@ -40,8 +40,9 @@ OpenDART 공식 API는 6개 카테고리(DS001~DS006)에 총 85개 엔드포인�
 
 1. **dart_search_disclosure** — 공시검색 (list.json). 공시유형·회사·날짜로 검색.
 2. **dart_get_company_info** — 기업개황 (company.json). 대표자·설립일·업종 등.
-3. **dart_search_corp_code** — 회사명/종목코드로 고유번호(corp_code) 검색. corpCode.xml
-   전체 목록(zip)을 서버가 캐싱(24시간 TTL)해서 부분일치 검색.
+3. **dart_search_corp_code** — 회사명/종목코드로 고유번호(corp_code) 검색.
+   `data/corp_code.json`(GitHub Actions가 매일 자동 갱신하는 정적 파일, 아래 "corp_code
+   정적 캐시 방식" 절 참고)에서 부분일치 검색.
 4. **dart_get_periodic_report_item** — 정기보고서 주요정보 30종 통합(DS002). 최대주주·
    임원·직원 현황, 배당, 자기주식, 증자·감자, 감사인·감사의견, 이사·감사 보수 등.
    `corp_code + bsns_year + reprt_code` 필수.
@@ -83,14 +84,43 @@ OpenDART 공식 API는 6개 카테고리(DS001~DS006)에 총 85개 엔드포인�
   아니라 정상 무응답이므로 `{totalCount:0, items:[]}`로 정규화.
 - DART API는 이 생태계의 다른 공공데이터포털 API들과 달리 응답 스키마가 매우 일관적
   (`{status, message, list?}` 단일 구조)이라 별도의 복잡한 정규화 분기가 필요 없었음.
+- **corpCode.xml 대용량 다운로드는 Vercel에서 요청 시점에 하면 안 됨**: 처음에는
+  `dart_search_corp_code` 요청이 올 때마다 opendart.fss.or.kr에서 corpCode.xml(zip,
+  3.5MB)을 직접 받아와 24시간 TTL로 캐싱하는 방식이었는데, 로컬(약 1.2초)과 달리 Vercel
+  프로덕션(iad1 리전)에서는 응답 헤더는 1초 내로 오면서도 본문 다운로드가 60초 제한을
+  넘기며 타임아웃되는 문제가 실제로 발생했다(2026-07-25 Vercel Runtime Logs로 확인).
+  동일 호스트의 소용량 JSON API 호출들은 정상 작동했으므로 대용량 파일 전송에 한정된
+  스로틀링으로 추정. 아래 "corp_code 정적 캐시 방식" 절의 구조로 전환해 해결.
+
+## corp_code 정적 캐시 방식 (2026-07-25 도입)
+
+`dart_search_corp_code`는 더 이상 요청 처리 중에 opendart.fss.or.kr을 직접 호출하지
+않습니다. 대신:
+
+1. `scripts/refresh-corp-code.mjs`가 corpCode.xml을 받아 `corp_code`/`corp_name`/
+   `stock_code`/`modify_date`만 추린 `data/corp_code.json`(약 10MB, 11만+ 건)을 생성.
+2. `.github/workflows/refresh-corp-code.yml`이 매일 02:00 KST에 이 스크립트를 자동
+   실행하고, 내용이 바뀌었을 때만 `data/corp_code.json`을 커밋·push (krx-regulation-mcp의
+   주간 재크롤링 → 자동 커밋 패턴과 동일). push되면 Vercel이 자동 재배포.
+3. `lib/dart_client.js`의 `loadCorpCodeList()`는 이 정적 파일을 `fs.readFileSync`로
+   읽기만 함 — 외부 네트워크 호출이 전혀 없어 타임아웃이 구조적으로 발생할 수 없음.
+
+**필요 설정**: GitHub 저장소 Settings > Secrets and variables > Actions에 `DART_API_KEY`
+시크릿을 등록해야 자동 갱신 워크플로가 동작합니다(Vercel 환경변수와는 별개로 등록 필요).
+수동 갱신은 저장소 Actions 탭에서 "Refresh corp_code.json" 워크플로를 "Run workflow"로
+즉시 실행하거나, 로컬에서 `DART_API_KEY=xxx npm run refresh-corp-code`로도 가능합니다.
+
+corp_code는 신규 법인 등록·상장·상호변경 때만 바뀌는 정적 성격의 데이터라 최대 1일
+지연은 실무상 문제되지 않을 것으로 판단했습니다(당일 신규 상장 종목을 그날 즉시 검색해야
+하는 경우가 아니라면).
 
 ## 현재 상태 (2026-07-25)
 
-코드는 완성되고 로컬 스모크테스트까지 마쳤으나, 사용자 요청으로 **GitHub push까지만 진행하고
-Vercel 배포·Settings 등록·관련 스킬(dart-disclosure-lookup) 전환은 보류** 중입니다. 기존에
-쓰던 제3자 호스팅 DART MCP는 그대로 유지되며 이 서버 완성과 무관하게 정상 작동합니다.
-실제로 전환하고 싶을 때 이 저장소를 기반으로 Vercel 배포 → 환경변수(DART_API_KEY) 등록 →
-Settings에 엔드포인트 등록 → dart-disclosure-lookup 스킬 업데이트 순으로 진행하면 됩니다.
+코드 완성, 로컬 스모크테스트 완료, GitHub push, Vercel 배포, corp_code 성능 문제
+해결까지 완료했습니다. 다만 사용자 요청으로 **Settings 등록·관련 스킬
+(dart-disclosure-lookup) 전환은 아직 보류** 중입니다. 기존에 쓰던 제3자 호스팅 DART MCP는
+그대로 유지되며 이 서버 완성과 무관하게 정상 작동합니다. 실제로 전환하고 싶을 때 Settings에
+엔드포인트 등록 → dart-disclosure-lookup 스킬 업데이트 순으로 진행하면 됩니다.
 
 ## 향후 개선 후보
 

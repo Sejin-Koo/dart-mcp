@@ -1,0 +1,39 @@
+name: Refresh corp_code.json
+
+on:
+  schedule:
+    # 매일 02:00 KST(=17:00 UTC 전날) 자동 실행
+    - cron: "0 17 * * *"
+  workflow_dispatch: {} # 저장소 Actions 탭에서 수동 실행 가능
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install --omit=dev --no-save adm-zip
+
+      - name: Refresh corp_code.json
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        run: node scripts/refresh-corp-code.mjs
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- data/corp_code.json; then
+            echo "변경 없음 — 커밋 생략"
+          else
+            git add data/corp_code.json
+            git commit -m "chore: corp_code.json 자동 갱신 ($(date -u +%Y-%m-%d))"
+            git push
+          fi
