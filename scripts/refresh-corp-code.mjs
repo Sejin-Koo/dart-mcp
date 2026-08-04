@@ -15,7 +15,7 @@
 // 실행: DART_API_KEY=xxx node scripts/refresh-corp-code.mjs
 
 import AdmZip from "adm-zip";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -40,17 +40,50 @@ function extractTag(block, tag) {
   return block.slice(s + openTag.length, e).trim();
 }
 
+// 데이터센터 IP 대역에서 opendart의 대용량 파일 전송이 간헐적으로 503을 반환하거나
+// 극단적으로 느려지는 사례가 실측됨(2026-08-04 클라우드 환경에서 재현: 소용량 JSON은
+// 정상, corpCode.xml만 503 또는 15KB/s 수준). 타임아웃 + 재시도(백오프)로 방어한다.
+const MAX_ATTEMPTS = 4;
+const TIMEOUT_MS = 240_000; // 다운로드 1회당 최대 4분
+const BACKOFF_MS = [0, 30_000, 60_000, 120_000];
+
+async function downloadWithRetry() {
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (BACKOFF_MS[attempt - 1]) {
+      console.log(`[refresh-corp-code] ${BACKOFF_MS[attempt - 1] / 1000}초 대기 후 재시도...`);
+      await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
+    }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
+    try {
+      console.log(`[refresh-corp-code] 다운로드 시도 ${attempt}/${MAX_ATTEMPTS}`);
+      const t0 = Date.now();
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new Error(`DART corpCode.xml HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      // zip 시그니처(PK) + 최소 크기 검증 — 오류 페이지를 zip으로 착각하지 않도록
+      if (buf.length < 500_000 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
+        throw new Error(`다운로드 결과가 정상 zip이 아님 (size=${buf.length})`);
+      }
+      console.log(`[refresh-corp-code] 다운로드 완료: ${Date.now() - t0}ms, size=${buf.length} bytes`);
+      return buf;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[refresh-corp-code] 시도 ${attempt} 실패: ${err.message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr;
+}
+
 async function main() {
   console.log(`[refresh-corp-code] corpCode.xml 다운로드 시작: ${new Date().toISOString()}`);
-  const t0 = Date.now();
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-  });
-  if (!res.ok) {
-    throw new Error(`DART corpCode.xml HTTP ${res.status}`);
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  console.log(`[refresh-corp-code] 다운로드 완료: ${Date.now() - t0}ms, size=${buf.length} bytes`);
+  const buf = await downloadWithRetry();
 
   const zip = new AdmZip(buf);
   const entry = zip.getEntries()[0];
@@ -78,6 +111,19 @@ async function main() {
   }
 
   console.log(`[refresh-corp-code] 파싱 완료: entries=${list.length}`);
+
+  // 기존 파일보다 건수가 10% 이상 줄었으면 부분 응답/데이터 이상으로 보고 덮어쓰지 않음
+  try {
+    const prev = JSON.parse(readFileSync(OUT_PATH, "utf-8"));
+    if (prev.count && list.length < prev.count * 0.9) {
+      throw new Error(
+        `신규 건수(${list.length})가 기존(${prev.count})보다 10% 이상 감소 — 부분 응답 의심, 갱신 중단`
+      );
+    }
+  } catch (err) {
+    if (err.message.includes("갱신 중단")) throw err;
+    // 기존 파일이 없거나 읽기 실패면 그대로 진행
+  }
 
   mkdirSync(path.dirname(OUT_PATH), { recursive: true });
   const payload = {
