@@ -1,5 +1,10 @@
 name: Refresh corp_code.json
 
+# 자동 커밋·push에 필요한 쓰기 권한 (기본 GITHUB_TOKEN은 읽기 전용이라 push가
+# exit code 128로 실패함 — 2026-08-04 수동 실행에서 실제 발생, 이 선언으로 해결)
+permissions:
+  contents: write
+
 on:
   schedule:
     # 매일 02:00 KST(=17:00 UTC 전날) 자동 실행
