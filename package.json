@@ -5,7 +5,8 @@
   "type": "module",
   "main": "api/mcp.js",
   "scripts": {
-    "refresh-corp-code": "node scripts/refresh-corp-code.mjs"
+    "refresh-corp-code": "node scripts/refresh-corp-code.mjs",
+    "test": "node test/representatives.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
