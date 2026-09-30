@@ -1,7 +1,7 @@
 // parseRepresentatives 단위 검증.
 // 입력은 이 대화에서 DART 원문 조회로 **실제로 관측한** 표지 문자열이다(지어낸 값 아님).
 // 네트워크·자격증명 없이 파싱 로직만 검증한다.
-import { parseRepresentatives } from "../lib/representatives.js";
+import { parseRepresentatives, pickLatestExecutiveSet } from "../lib/representatives.js";
 import { formatDartResult } from "../lib/format.js";
 
 const COVER = (company, title, names) =>
@@ -94,6 +94,77 @@ check(
   formatDartResult({ 비고: "가|나" }).includes("가\\|나"),
   formatDartResult({ 비고: "가|나" })
 );
+
+// ── 임원현황 후보 중 결산기준일이 가장 최근인 보고서를 고르는가
+console.log("\n── 최신 보고서 선택");
+const EX = (stlm, rcept, ofcps = "대표이사", nm = "황정일") => ({
+  nm, ofcps, stlm_dt: stlm, rcept_no: rcept, corp_name: "포니링크",
+});
+
+// 실측(2026-09-30): 사업보고서만 보면 6개월 묵은 명단이 나온다
+const 사업2025 = { year: 2025, code: "11011", list: [EX("2025-12-31", "20260318000966")] };
+const 반기2026 = { year: 2026, code: "11012", list: [EX("2026-06-30", "20260814003964")] };
+check(
+  "반기보고서가 더 최근이면 그쪽을 고른다",
+  pickLatestExecutiveSet([사업2025, 반기2026])?.code === "11012"
+);
+check(
+  "입력 순서가 바뀌어도 결과가 같다",
+  pickLatestExecutiveSet([반기2026, 사업2025])?.code === "11012"
+);
+
+// 12월 결산이 아닌 회사 — 보고서 종류로 순서를 가정하면 틀린다
+check(
+  "3월 결산사는 사업보고서가 같은 해 반기보다 최근일 수 있다",
+  pickLatestExecutiveSet([
+    { year: 2026, code: "11012", list: [EX("2025-09-30", "20251114000001")] },
+    { year: 2025, code: "11011", list: [EX("2026-03-31", "20260630000001")] },
+  ])?.code === "11011"
+);
+
+// 표기 흔들림 — "2026년 06월 30일"과 "2026-06-30"은 같은 날이다
+check(
+  "결산기준일 표기가 달라도 같은 날로 비교한다",
+  pickLatestExecutiveSet([
+    { year: 2026, code: "11012", list: [EX("2026년 06월 30일", "20260814003964")] },
+    { year: 2025, code: "11011", list: [EX("2025-12-31", "20260318000966")] },
+  ])?.code === "11012"
+);
+
+// 기준일이 같으면 나중에 제출된 쪽(정정보고서 등)
+check(
+  "기준일이 같으면 접수번호가 큰 쪽",
+  pickLatestExecutiveSet([
+    { year: 2025, code: "11011", list: [EX("2025-12-31", "20260318000966")] },
+    { year: 2025, code: "11011", list: [EX("2025-12-31", "20260520000111")] },
+  ])?.rcept === "20260520000111"
+);
+
+check(
+  "대표 직위가 없으면 고르지 않는다",
+  pickLatestExecutiveSet([
+    { year: 2025, code: "11011", list: [EX("2025-12-31", "1", "사외이사", "이익우")] },
+  ]) === null
+);
+check("빈 입력은 null", pickLatestExecutiveSet([]) === null && pickLatestExecutiveSet() === null);
+check(
+  "각자대표·대표집행임원도 대표로 잡는다",
+  pickLatestExecutiveSet([
+    { year: 2025, code: "11011", list: [EX("2025-12-31", "1", "각자대표이사"), EX("2025-12-31", "1", "대표집행임원", "김철수")] },
+  ])?.reps.length === 2
+);
+
+// ── 필드 라벨 — 임원현황은 tenure_end_dt가 아니라 tenure_end_on을 쓴다
+console.log("\n── 임원현황 필드 라벨");
+const execMd = formatDartResult({
+  list: [{ nm: "황정일", ofcps: "대표이사", rgist_exctv_at: "사내이사", fte_at: "상근",
+           chrg_job: "경영총괄", hffc_pd: "2017.03.28~현재", tenure_end_on: "2027년 03월 15일" }],
+});
+for (const raw of ["rgist_exctv_at", "fte_at", "tenure_end_on"]) {
+  check(`${raw}가 영문 그대로 찍히지 않는다`, !execMd.includes(raw), execMd);
+}
+check("등기임원여부·상근여부·임기만료일 라벨이 나온다",
+  ["등기임원여부", "상근여부", "임기만료일"].every((k) => execMd.includes(k)), execMd);
 
 console.log(`\n통과 ${pass} / 실패 ${fail} (전체 ${pass + fail})`);
 process.exit(fail ? 1 : 0);
