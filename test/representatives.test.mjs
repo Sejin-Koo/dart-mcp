@@ -2,6 +2,7 @@
 // 입력은 이 대화에서 DART 원문 조회로 **실제로 관측한** 표지 문자열이다(지어낸 값 아님).
 // 네트워크·자격증명 없이 파싱 로직만 검증한다.
 import { parseRepresentatives } from "../lib/representatives.js";
+import { formatDartResult } from "../lib/format.js";
 
 const COVER = (company, title, names) =>
   `첨부된 재무제표는 당사가 작성한 것입니다. \n ${company} ${title} ${names} \n 본점 소재지 : \n (도로명주소) \n 서울시 구로구 디지털로26길 43 \n (전 화) \n 02-2025-4999 \n 재 무 상 태 표 `;
@@ -27,13 +28,72 @@ const CASES = [
 ];
 
 let pass = 0, fail = 0;
+const check = (label, ok, extra) => {
+  console.log(`${ok ? "  OK " : "  !! "} ${label}`);
+  if (!ok && extra) console.log(`       ${extra}`);
+  ok ? pass++ : fail++;
+};
+
+console.log("── 성명 파싱");
 for (const c of CASES) {
   const got = parseRepresentatives(c.input);
   const names = got ? got.names : null;
-  const ok = JSON.stringify(names) === JSON.stringify(c.expect);
-  console.log(`${ok ? "  OK " : "  !! "} ${c.label}`);
-  if (!ok) console.log(`       기대 ${JSON.stringify(c.expect)} / 실제 ${JSON.stringify(names)}`);
-  ok ? pass++ : fail++;
+  check(
+    c.label,
+    JSON.stringify(names) === JSON.stringify(c.expect),
+    `기대 ${JSON.stringify(c.expect)} / 실제 ${JSON.stringify(names)}`
+  );
 }
-console.log(`\n통과 ${pass} / 실패 ${fail} (전체 ${CASES.length})`);
+
+// ── 표지상_회사명: 직전 문장이 섞여 들어오지 않아야 한다
+// (실측 불량값: '2024년 12월 31일 까지 "첨부된 재무제표는 당사가 작성한 것입니다." 주식회사 비디')
+console.log("\n── 표지상 회사명");
+const COMPANY_CASES = [
+  ["주식회사 비디", "주식회사 비디"],
+  ["에어테크엔지니어링 주식회사", "에어테크엔지니어링 주식회사"],
+  ["삼성웰스토리주식회사", "삼성웰스토리주식회사"],
+  ["㈜비디", "㈜비디"],
+  ["쿠팡 주식회사", "쿠팡 주식회사"],
+];
+for (const [company, expect] of COMPANY_CASES) {
+  const got = parseRepresentatives(COVER(company, "대표이사", "홍길동"));
+  check(
+    `${company} → ${expect}`,
+    got && got.companyHint === expect,
+    `실제 ${JSON.stringify(got && got.companyHint)}`
+  );
+}
+
+// ── 마크다운 렌더: 중첩 객체·객체 배열이 "[object Object]"로 찍히지 않아야 한다
+console.log("\n── 중첩 값 렌더");
+const NESTED = {
+  corp_code: "01447800",
+  조회됨: true,
+  대표이사: ["김기용", "독고세준", "조성우"],
+  인원수: 3,
+  상세: [
+    { 성명: "김기용", 직위: "대표이사", 재직기간: "2017.03.28~현재", 임기만료일: "2027.03.27" },
+    { 성명: "독고세준", 직위: "대표이사", 재직기간: "2021.03.26~현재", 임기만료일: "2027.03.25" },
+  ],
+  출처: { 경로: "사업보고서 임원현황", 사업연도: "2024", 접수번호: "20250331001234" },
+  caveats: [
+    "사업보고서 임원현황 기재 기준입니다. 해당 사업연도 말 시점이므로 이후의 변동은 반영되지 않습니다.",
+    "각자대표인지 공동대표인지는 임원현황에 기재되지 않습니다.",
+  ],
+};
+const md = formatDartResult(NESTED);
+check("[object Object]가 없다", !md.includes("[object Object]"));
+check("객체 배열이 하위 표로 나온다", md.includes("**상세**") && md.includes("2017.03.28~현재"));
+check("중첩 객체가 한 줄로 펼쳐진다", md.includes("접수번호: 20250331001234"));
+check("긴 배열은 목록으로 떨어진다", /\*\*유의사항\*\*\n\n- /.test(md));
+check("짧은 배열은 셀에 그대로 들어간다", md.includes("김기용 · 독고세준 · 조성우"));
+
+// 값에 든 파이프가 열을 깨뜨리지 않아야 한다
+check(
+  "셀 안의 | 는 이스케이프된다",
+  formatDartResult({ 비고: "가|나" }).includes("가\\|나"),
+  formatDartResult({ 비고: "가|나" })
+);
+
+console.log(`\n통과 ${pass} / 실패 ${fail} (전체 ${pass + fail})`);
 process.exit(fail ? 1 : 0);
