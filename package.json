@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^4.4.3",
-    "adm-zip": "^0.5.16"
+    "@vercel/blob": "^2.8.2",
+    "adm-zip": "^0.5.16",
+    "zod": "^4.4.3"
   }
 }

@@ -65,8 +65,15 @@ XBRL 원본은 이미 다른 방식(정적 캐시/불필요)으로 해결돼 있
    다루지 않는 서술형 정보(사업의 내용·계열회사 현황·정관상 사업목적과 영위 여부·주요
    계약·주석·별첨) 전용. `rcept_no`(접수번호) 필요. mode=outline(TITLE 목차+SUMMARY
    요약수치)/count(키워드 등장횟수만, 부존재 증명용)/extract(키워드 주변 텍스트,
-   occurrenceIndex로 다중 발견 위치 선택). 원문은 요청 처리 중에만 메모리에 존재하고
-   저장하지 않으며, 응답도 추출된 일부만 반환한다. 2026-08-08 신설.
+   occurrenceIndex로 다중 발견 위치 선택). 응답은 추출된 일부만 반환한다. 2026-08-08 신설.
+   **2026-10-31 원문 24시간 보관 추가** — 받은 원문 zip을 Vercel Blob 비공개 저장소
+   (`dart-doc-cache`, iad1)에 접수번호 단위로 24시간 보관해, 같은 보고서 재조회 시 opendart에서
+   다시 받지 않는다(첫 호출 30~40초 → 이후 수 초). 같은 접수번호의 원문은 바뀌지 않으므로
+   (새 보고서·정정공시는 새 접수번호) 보관본이 낡은 답을 내지 않는다. 만료는 읽을 때 판정하고,
+   `api/doc-cache-cleanup.js`가 매일 03:00 KST(Vercel Cron, `CRON_SECRET` 인증)에 만료분을
+   지운다. `BLOB_READ_WRITE_TOKEN`이 없거나 Blob 호출이 실패하면 종전처럼 직접 받는다
+   (응답 '원문:' 줄에 상태 표시). 끄려면 환경변수 `DOC_CACHE_DISABLED=1`.
+   검증: `DART_API_KEY_FILE=<키파일> DOC_ZIP_FILE=<원문zip> node test/doc_cache.smoke.mjs`.
 10. **dart_get_representatives** — 대표이사 전원(정기보고서 임원현황 → 감사보고서 표지).
 ※ `dcf_calculate`(DCF 계산기)는 2026-10-21 `valuation-mcp`(https://github.com/Sejin-Koo/valuation-mcp)로
    옮기고 이 서버에서는 삭제했다. 업무 에이전트 중계 서버도 그 서버로 넘긴다.

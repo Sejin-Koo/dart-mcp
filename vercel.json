@@ -2,6 +2,15 @@
   "functions": {
     "api/mcp.js": {
       "maxDuration": 60
+    },
+    "api/doc-cache-cleanup.js": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/doc-cache-cleanup",
+      "schedule": "0 18 * * *"
+    }
+  ]
 }
