@@ -1,7 +1,13 @@
 // parseRepresentatives 단위 검증.
 // 입력은 이 대화에서 DART 원문 조회로 **실제로 관측한** 표지 문자열이다(지어낸 값 아님).
 // 네트워크·자격증명 없이 파싱 로직만 검증한다.
-import { parseRepresentatives, pickLatestExecutiveSet } from "../lib/representatives.js";
+import {
+  parseRepresentatives,
+  pickLatestExecutiveSet,
+  repBasis,
+  parseCeoNames,
+  reconcileWithCompany,
+} from "../lib/representatives.js";
 import { formatDartResult } from "../lib/format.js";
 
 const COVER = (company, title, names) =>
@@ -153,6 +159,60 @@ check(
     { year: 2025, code: "11011", list: [EX("2025-12-31", "1", "각자대표이사"), EX("2025-12-31", "1", "대표집행임원", "김철수")] },
   ])?.reps.length === 2
 );
+
+// ── 담당업무 칸의 대표이사 (실측 2026-11-16 DART 임원현황)
+console.log("\n── 담당업무 칸 · 직급만으로는 인정 안 함");
+const P = (nm, ofcps, rgist, chrg) => ({ nm, ofcps, rgist_exctv_at: rgist, chrg_job: chrg });
+const BASIS = [
+  // 팅크웨어 2025 사업보고서·2026 반기: 직위 '사장', 담당업무에 대표이사
+  ["팅크웨어 2025 — 담당업무 '대표이사, …'", P("이흥복", "사장", "사내이사", "대표이사, 전사 경영 전반 총괄"), "담당업무"],
+  ["팅크웨어 2026 반기 — 담당업무 '대표이사 …'", P("이흥복", "사장", "사내이사", "대표이사 전사 경영 전반 총괄"), "담당업무"],
+  // 삼성전자 2026 반기
+  ["삼성전자 전영현 — 'ㆍ대표이사 (DS부문…)'", P("전영현", "부회장", "사내이사", "ㆍ대표이사   (DS부문 경영전반 총괄)"), "담당업무"],
+  ["[음성] 삼성전자 김용관 — 등기 사장이지만 대표 아님", P("김용관", "사장", "사내이사", "ㆍDS부문 경영전략총괄"), null],
+  ["[음성] 삼성전자 노태문 — 반기 임원현황엔 표시 없음", P("노태문", "사장", "사내이사", "ㆍDX부문장 직무대행ㆍMX사업부장"), null],
+  ["직위에 대표 — 기존 방식 유지", P("황정일", "대표이사", "사내이사", "경영총괄"), "직위"],
+  ["대표집행임원은 미등기여도 인정", P("김철수", "사장", "미등기", "대표집행임원"), "담당업무"],
+  ["[음성] 대표이사를 꾸미는 말 — 직속", P("박감사", "상무", "사내이사", "대표이사 직속 감사실장"), null],
+  ["[음성] 대표이사 비서실장", P("최비서", "이사", "사내이사", "대표이사 비서실장"), null],
+  ["[음성] 대표이사실", P("정실장", "상무", "사내이사", "대표이사실 총괄"), null],
+  ["[음성] 미등기 임원의 '대표이사…' 표기", P("한미등", "전무", "미등기", "대표이사 겸 사업부장"), null],
+  ["[음성] 담당업무 중간의 대표이사(앞에 다른 말)", P("오중간", "사장", "사내이사", "자회사 대표이사 겸임"), null],
+  ["각자대표이사로 시작", P("윤각자", "부사장", "사내이사", "각자대표이사 / 영업총괄"), "담당업무"],
+];
+for (const [label, row, expect] of BASIS) {
+  const got = repBasis(row);
+  check(label, got === expect, `기대 ${expect} / 실제 ${got}`);
+}
+
+// 팅크웨어 재현: 2024 사업보고서만 직위에 '대표 이사'. 예전에는 이 보고서로 내려갔다.
+const TW = (stlm, rcept, ofcps, chrg) => ({ nm: "이흥복", ofcps, rgist_exctv_at: "사내이사", chrg_job: chrg, stlm_dt: stlm, rcept_no: rcept });
+const tw = pickLatestExecutiveSet([
+  { year: 2024, code: "11011", list: [TW("2024-12-31", "20250319001133", "대표 이사", "전사 경영 전반 총괄")] },
+  { year: 2025, code: "11011", list: [TW("2025-12-31", "20260320001267", "사장", "대표이사, 전사 경영 전반 총괄")] },
+  { year: 2026, code: "11012", list: [TW("2026-06-30", "20260814000001", "사장", "대표이사 전사 경영 전반 총괄")] },
+]);
+check("팅크웨어 — 2026 반기 보고서를 고른다", tw?.code === "11012" && tw?.year === 2026, JSON.stringify(tw && { y: tw.year, c: tw.code }));
+check("팅크웨어 — 최신 보고서와 같으면 stale 아님", tw?.latest?.stlm === tw?.stlm);
+
+// 최근 보고서에 대표 표시가 없으면 latest가 best보다 최근으로 남는다(경고 근거)
+const st = pickLatestExecutiveSet([
+  { year: 2025, code: "11011", list: [TW("2025-12-31", "1", "대표이사", "경영총괄")] },
+  { year: 2026, code: "11012", list: [TW("2026-06-30", "2", "사장", "경영총괄")] },
+]);
+check("최근 보고서에 대표 표시가 없으면 latest가 더 최근", st?.stlm === "20251231" && st?.latest?.stlm === "20260630");
+
+// ── 기업개황 대표자명 대조
+console.log("\n── 기업개황 대조");
+check("ceo_nm 쉼표 2명", JSON.stringify(parseCeoNames("전영현, 노태문").names) === '["전영현","노태문"]');
+check("ceo_nm 괄호·직명 제거", JSON.stringify(parseCeoNames("홍길동(각자대표), 김철수").names) === '["홍길동","김철수"]');
+check("ceo_nm '외 1명' → partial", parseCeoNames("홍길동 외 1명").partial === true && parseCeoNames("홍길동 외 1명").names[0] === "홍길동");
+check("ceo_nm 빈 값", parseCeoNames("").names.length === 0);
+const rc = reconcileWithCompany(["전영현"], ["전영현", "노태문"]);
+check("삼성전자 — 기업개황에만 노태문", JSON.stringify(rc.기업개황에만) === '["노태문"]' && rc.임원현황에만.length === 0);
+const rc2 = reconcileWithCompany(["김기용", "독고세준", "조성우"], ["김기용"]);
+check("비디 — 임원현황에만 2명", rc2.임원현황에만.length === 2 && rc2.일치[0] === "김기용");
+check("공백 차이는 같은 사람", reconcileWithCompany(["김 도 영"], ["김도영"]).일치.length === 1);
 
 // ── 필드 라벨 — 임원현황은 tenure_end_dt가 아니라 tenure_end_on을 쓴다
 console.log("\n── 임원현황 필드 라벨");
