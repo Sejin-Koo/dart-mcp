@@ -7,6 +7,7 @@ import {
   repBasis,
   parseCeoNames,
   reconcileWithCompany,
+  sameName,
 } from "../lib/representatives.js";
 import { formatDartResult } from "../lib/format.js";
 
@@ -212,6 +213,9 @@ const rc = reconcileWithCompany(["전영현"], ["전영현", "노태문"]);
 check("삼성전자 — 기업개황에만 노태문", JSON.stringify(rc.기업개황에만) === '["노태문"]' && rc.임원현황에만.length === 0);
 const rc2 = reconcileWithCompany(["김기용", "독고세준", "조성우"], ["김기용"]);
 check("비디 — 임원현황에만 2명", rc2.임원현황에만.length === 2 && rc2.일치[0] === "김기용");
+const hy = reconcileWithCompany(["정의선", "호세 무뇨스", "최영일"], parseCeoNames("정의선, 무뇨스 바르셀로 호세 안토니오, 최영일(각자 대표이사)").names);
+check("현대자동차 — 외국인 성명 표기 차이는 같은 사람", hy.일치.length === 3 && hy.기업개황에만.length === 0 && hy.임원현황에만.length === 0 && hy.표기차이?.length === 1, JSON.stringify(hy));
+check("[음성] 낱말 하나만 같으면 다른 사람", sameName("호세", "호세 안토니오") === false && sameName("김철수", "김철호") === false);
 check("공백 차이는 같은 사람", reconcileWithCompany(["김 도 영"], ["김도영"]).일치.length === 1);
 
 // ── 필드 라벨 — 임원현황은 tenure_end_dt가 아니라 tenure_end_on을 쓴다
